@@ -66,30 +66,6 @@ def pytest_configure(config):
                 _step['cleanup'] = cleanup
                 steps_data.remove(cleanup)
 
-    # for cleanup in steps_data:
-    #     for step in steps_data:
-    #         if cleanup['resources']
-
-    # cases = []
-
-    # for last_step in last_steps:
-    #     test_case = TestCase()
-    #     step_data = _retrieve_step_data(last_step)
-
-    #     resources = set(step_data['args']) & RESOURCES
-    #     if resources:
-    #         cleanup = step_data
-    #     else:
-    #         test_case.add_step(step_data)
-
-    #     for resource in resources:
-    #         step_data = _get_step_by_resource(resource)
-    #         if cleanup:
-    #             step_data['cleanup'] = cleanup
-    #         test_case.add_step(step_data)
-
-    #     cases.append(test_case.to_json())
-
     steps_data = [{'is_used': False, 'step': sd} for sd in steps_data]
 
     test_cases = []
@@ -118,7 +94,7 @@ def pytest_configure(config):
                     _st = copy.copy(_sd['step'])
 
                     if match in _st['outlet'].items():
-                        if _sd['is_used']:
+                        if _sd['is_used'] and not tc_step[0]:
                             for tc in test_cases:
                                 _tc_step = _get_tc_step(tc, _st['name'])
                                 if _tc_step:
@@ -126,7 +102,21 @@ def pytest_configure(config):
 
                         else:
                             _st['step'] = step
+                            _st['is_used'] = True
                             step = connect(_st)
+
+                    if match in _st['cleanup']['outlet'].items():
+                        if _sd['is_used'] and not tc_step[0]:
+                            for tc in test_cases:
+                                _tc_step = _get_tc_step(tc, _st['name'])
+                                if _tc_step:
+                                    tc_step[0] = _tc_step
+
+                        else:
+                            _st['cleanup']['step'] = step
+                            _st['is_used'] = True
+                            step = connect(_st)
+
             return step
 
         step = connect(step)
@@ -141,11 +131,35 @@ def pytest_configure(config):
     import ipdb; ipdb.set_trace()
 
 
-def _get_tc_step(tc, name):
-    while tc['step']:
-        tc = tc['step']
-    return tc
+def print_test_cases(test_cases):
+    indend = 0
+    cleanups = []
+    res = ''
+    for step in test_cases:
+        while step:
+            res += ' ' * indend + step['name'] + '\n'
+            if step['cleanup']:
+                indend += 2
+                cleanups.append(step['cleanup'])
+            step = step['step']
+        while cleanups:
+            indend -= 2
+            cleanup = cleanups.pop()
+            res += ' ' * indend + cleanup['name'] + '\n'
+        res += '\n'
+    return res
 
+
+def _get_tc_step(step, name):
+    if not step:
+        return
+    if step['name'] == name:
+        while step['step']:
+            step = step['step']
+        return step
+    res1 = _get_tc_step(step['step'], name)
+    res2 = _get_tc_step(step['cleanup'], name)
+    return res1 or res2
 
 def _get_step_by_resource(resource):
     for step in ALL_STEPS:
