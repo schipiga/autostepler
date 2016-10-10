@@ -2,6 +2,7 @@ import pkgutil
 import importlib
 import inspect
 import json
+import copy
 
 RESOURCES = {'server'}
 
@@ -89,7 +90,61 @@ def pytest_configure(config):
 
     #     cases.append(test_case.to_json())
 
+    steps_data = [{'is_used': False, 'step': sd} for sd in steps_data]
+
+    test_cases = []
+
+    for sd in steps_data[:]:
+
+        if sd['is_used']:
+            continue
+
+        step = copy.copy(sd['step'])
+
+        tc_step = [None]
+
+        def connect(step):
+            resources = set(step['args']) & RESOURCES
+            inlet = step['inlet']
+
+            for resource in resources:
+                cond = inlet.get(resource)
+                if cond:
+                    match = (resource, cond)
+                else:
+                    match = (resource, 'create')
+
+                for _sd in steps_data:
+                    _st = copy.copy(_sd['step'])
+
+                    if match in _st['outlet'].items():
+                        if _sd['is_used']:
+                            for tc in test_cases:
+                                _tc_step = _get_tc_step(tc, _st['name'])
+                                if _tc_step:
+                                    tc_step[0] = _tc_step
+
+                        else:
+                            _st['step'] = step
+                            step = connect(_st)
+            return step
+
+        step = connect(step)
+
+        if tc_step[0]:
+            tc_step[0]['step'] = step
+        else:
+            test_cases.append(step)
+        sd['is_used'] = True
+
+
     import ipdb; ipdb.set_trace()
+
+
+def _get_tc_step(tc, name):
+    while tc['step']:
+        tc = tc['step']
+    return tc
 
 
 def _get_step_by_resource(resource):
@@ -115,11 +170,13 @@ def _retrieve_step_data(step):
                 gain = (k, False)
 
     return {
-        'step': step.__name__,
+        'name': step.__name__,
         'args': args,
         'gain': gain,
         'inlet': inlet,
         'outlet': outlet,
+        'step': None,
+        'cleanup': None,
     }
 
 
