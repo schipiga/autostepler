@@ -4,7 +4,7 @@ import inspect
 import json
 import copy
 
-RESOURCES = {'server'}
+REGISTERED_RESOURCES = set()
 
 CLEANUP_PREFIXES = {'il', 'ir', 'im', 'in', 'un', 'dis', 'mis', 'non'}
 
@@ -33,102 +33,100 @@ def pytest_generate_tests(metafunc):
 
 
 def pytest_configure(config):
-    # last_steps = _get_last_steps()
+    step_nodes = [_get_step_node(step) for step in ALL_STEPS]
+    _attach_cleanups(step_nodes)
+    step_nodes = [{'is_used': False, 'step': node} for node in step_nodes]
+    test_cases = _compose_test_cases(step_nodes)
 
-    steps_data = [_retrieve_step_data(step) for step in ALL_STEPS]
 
-    for cleanup in steps_data[:]:
-        okeys = set(cleanup['outlet'].keys())
-        ikeys = set(cleanup['inlet'].keys())
-        keys = okeys & ikeys
+def _compose_test_cases(step_nodes):
 
-        match = None
+    def _compose(step):
+        resource_names = set(step['args']) & REGISTERED_RESOURCES
+        inlet = step['inlet']
 
-        for key in keys:
-            cval = cleanup['outlet'][key]
-            sval = cleanup['inlet'][key]
+        for resource_name in resource_names:
+            in_resource_status = inlet.get(resource_name)
+            if in_resource_status:
+                step_matcher = (resource_name, in_resource_status)
+            else:
+                step_matcher = (resource_name, 'create')
 
-            for k, v in CLEANUP_DICT.iteritems():
-                if cval.startswith(k) and sval.startswith(v):
-                    match = (key, sval)
-                    break
-            if cval.split(sval)[0] in CLEANUP_PREFIXES:
-                match = (key, sval)
+            for node in step_nodes[:]:
+                prev_step = copy.copy(node['step'])
 
-            if match:
-                break
+                for join_step in (prev_step, prev_step['cleanup']):
+                    if step_matcher in join_step['outlet'].items():
 
-        if not match:
-            continue
+                        if node['is_used'] and not test_case_step[0]:
+                            for test_case in test_cases:
+                                _test_case_step = _get_test_case_step(
+                                    test_case, prev_step['name'])
+                                if _test_case_step:
+                                    test_case_step[0] = _test_case_step
 
-        for _step in steps_data:
-            if match in _step['outlet'].items():
-                _step['cleanup'] = cleanup
-                steps_data.remove(cleanup)
-
-    steps_data = [{'is_used': False, 'step': sd} for sd in steps_data]
+                        else:
+                            join_step['step'] = step
+                            prev_step['is_used'] = True
+                            step = _compose(prev_step)
+                        break
+        return step
 
     test_cases = []
-
-    for sd in steps_data[:]:
-
-        if sd['is_used']:
+    for node in step_nodes[:]:
+        if node['is_used']:
             continue
 
-        step = copy.copy(sd['step'])
+        step = copy.copy(node['step'])
 
-        tc_step = [None]
+        test_case_step = [None]
+        step = _compose(step)
 
-        def connect(step):
-            resources = set(step['args']) & RESOURCES
-            inlet = step['inlet']
-
-            for resource in resources:
-                cond = inlet.get(resource)
-                if cond:
-                    match = (resource, cond)
-                else:
-                    match = (resource, 'create')
-
-                for _sd in steps_data:
-                    _st = copy.copy(_sd['step'])
-
-                    if match in _st['outlet'].items():
-                        if _sd['is_used'] and not tc_step[0]:
-                            for tc in test_cases:
-                                _tc_step = _get_tc_step(tc, _st['name'])
-                                if _tc_step:
-                                    tc_step[0] = _tc_step
-
-                        else:
-                            _st['step'] = step
-                            _st['is_used'] = True
-                            step = connect(_st)
-
-                    if match in _st['cleanup']['outlet'].items():
-                        if _sd['is_used'] and not tc_step[0]:
-                            for tc in test_cases:
-                                _tc_step = _get_tc_step(tc, _st['name'])
-                                if _tc_step:
-                                    tc_step[0] = _tc_step
-
-                        else:
-                            _st['cleanup']['step'] = step
-                            _st['is_used'] = True
-                            step = connect(_st)
-
-            return step
-
-        step = connect(step)
-
-        if tc_step[0]:
-            tc_step[0]['step'] = step
+        if test_case_step[0]:
+            test_case_step[0]['step'] = step
         else:
             test_cases.append(step)
-        sd['is_used'] = True
+
+        node['is_used'] = True
+    return test_cases
 
 
-    import ipdb; ipdb.set_trace()
+def _attach_cleanups(step_nodes):
+    for cleanup in step_nodes[:]:
+        out_keys = set(cleanup['outlet'].keys())
+        in_keys = set(cleanup['inlet'].keys())
+
+        common_keys = out_keys & in_keys
+
+        step_matchers = []
+
+        for resource_name in common_keys:
+            out_resource_status = cleanup['outlet'][resource_name]
+            in_resource_status = cleanup['inlet'][resource_name]
+
+            for key, val in CLEANUP_DICT.iteritems():
+                if (out_resource_status.startswith(key) and
+                        in_resource_status.startswith(val)):
+                    step_matchers.append((resource_name, in_resource_status))
+                    break
+
+            prefix = out_resource_status.split(in_resource_status)[0]
+            if prefix in CLEANUP_PREFIXES:
+                step_matchers.append((resource_name, in_resource_status))
+
+        assert len(step_matchers) < 2, "Too many resources are changed"
+
+        if not step_matchers:
+            continue
+
+        for node in step_nodes[:]:
+            if step_matchers[0] in node['outlet'].items():
+                node['cleanup'] = cleanup
+                step_nodes.remove(cleanup)
+                break
+        else:
+            raise LookupError(
+                "No setup step for cleanup {}".format(node['name']))
 
 
 def print_test_cases(test_cases):
@@ -147,29 +145,24 @@ def print_test_cases(test_cases):
             cleanup = cleanups.pop()
             res += ' ' * indend + cleanup['name'] + '\n'
         res += '\n'
-    return res
+    print res
 
 
-def _get_tc_step(step, name):
+def _get_test_case_step(step, name):
     if not step:
         return
+
     if step['name'] == name:
         while step['step']:
             step = step['step']
         return step
-    res1 = _get_tc_step(step['step'], name)
-    res2 = _get_tc_step(step['cleanup'], name)
+
+    res1 = _get_test_case_step(step['step'], name)
+    res2 = _get_test_case_step(step['cleanup'], name)
     return res1 or res2
 
-def _get_step_by_resource(resource):
-    for step in ALL_STEPS:
-        step_data = _retrieve_step_data(step)
-        gain = step_data['gain']
-        if gain[0] == resource and gain[1]:
-            return step_data
 
-
-def _retrieve_step_data(step):
+def _get_step_node(step):
     args = [arg for arg in inspect.getargspec(step).args if arg != 'self']
 
     inlet = getattr(step, 'inlet', {})
@@ -194,10 +187,6 @@ def _retrieve_step_data(step):
     }
 
 
-def _get_last_steps():
-    return [step for step in ALL_STEPS if step.__name__.startswith('delete')]
-
-
 def _get_steps():
     step_classes = []
     for _, pkg_name, is_pkg in pkgutil.iter_modules('.'):
@@ -215,6 +204,8 @@ def _get_steps():
             obj = getattr(steps_module, obj_name)
 
             if inspect.isclass(obj):
+                resource_name = obj.__name__.split('Steps')[0].lower()
+                REGISTERED_RESOURCES.add(resource_name)
                 step_classes.append(obj)
 
     return [getattr(cls, name) for cls in step_classes for name in dir(cls)
