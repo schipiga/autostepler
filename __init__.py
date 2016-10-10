@@ -17,7 +17,7 @@ class Helper():
 
 
 class Dock(object):
-    input = Helper('input')
-    output = Helper('output')
+    inlet = Helper('inlet')
+    outlet = Helper('outlet')
 
 dock = Dock()
