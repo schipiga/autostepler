@@ -15,18 +15,6 @@ CLEANUP_DICT = {
 }
 
 
-class TestCase(object):
-
-    def __init__(self):
-        self._steps = []
-
-    def add_step(self, step):
-        self._steps.append(step)
-
-    def to_json(self):
-        return json.dumps({'steps': self._steps})
-
-
 def pytest_generate_tests(metafunc):
     if 'test_case' in metafunc.fixturenames:
         metafunc.parametrize('test_case', ['a', 'b', 'c'])
@@ -36,7 +24,10 @@ def pytest_configure(config):
     step_nodes = [_get_step_node(step) for step in ALL_STEPS]
     _attach_cleanups(step_nodes)
     step_nodes = [{'is_used': False, 'step': node} for node in step_nodes]
+
     test_cases = _compose_test_cases(step_nodes)
+    print_test_cases(test_cases)
+    import ipdb; ipdb.set_trace()
 
 
 def _compose_test_cases(step_nodes):
@@ -55,19 +46,35 @@ def _compose_test_cases(step_nodes):
             for node in step_nodes[:]:
                 prev_step = copy.copy(node['step'])
 
-                for join_step in (prev_step, prev_step['cleanup']):
+                if prev_step['cleanup']:
+                    join_steps = (prev_step, prev_step['cleanup'])
+                else:
+                    join_steps = (prev_step,)
+
+                for join_step in join_steps:
                     if step_matcher in join_step['outlet'].items():
 
-                        if node['is_used'] and not test_case_step[0]:
-                            for test_case in test_cases:
+                        if node['is_used']:
+                            if test_case_idx[0]:
+                                idx = test_case_idx[0]
                                 _test_case_step = _get_test_case_step(
-                                    test_case, prev_step['name'])
-                                if _test_case_step:
+                                    test_cases[idx], join_step['name'])
+                            else:
+                                for idx, test_case in enumerate(test_cases):
+                                    _test_case_step = _get_test_case_step(
+                                        test_case, join_step['name'])
+
+                            if _test_case_step:
+                                if not test_case_step[0]:
                                     test_case_step[0] = _test_case_step
+                                else:
+                                    if (test_case_step[0][0] <
+                                            _test_case_step[0]):
+                                        test_case_step[0] = _test_case_step
 
                         else:
                             join_step['step'] = step
-                            prev_step['is_used'] = True
+                            node['is_used'] = True
                             step = _compose(prev_step)
                         break
         return step
@@ -79,11 +86,12 @@ def _compose_test_cases(step_nodes):
 
         step = copy.copy(node['step'])
 
+        test_case_idx = [None]
         test_case_step = [None]
         step = _compose(step)
 
         if test_case_step[0]:
-            test_case_step[0]['step'] = step
+            test_case_step[0][1]['step'] = step
         else:
             test_cases.append(step)
 
@@ -130,36 +138,54 @@ def _attach_cleanups(step_nodes):
 
 
 def print_test_cases(test_cases):
-    indend = 0
-    cleanups = []
-    res = ''
+    indend = [0]
+    res = ['']
     for step in test_cases:
-        while step:
-            res += ' ' * indend + step['name'] + '\n'
+
+        def flatify(step):
+            if not step:
+                return
+            res[0] += ' ' * indend[0] + step['name'] + '\n'
             if step['cleanup']:
-                indend += 2
-                cleanups.append(step['cleanup'])
-            step = step['step']
-        while cleanups:
-            indend -= 2
-            cleanup = cleanups.pop()
-            res += ' ' * indend + cleanup['name'] + '\n'
-        res += '\n'
-    print res
+                indend[0] += 2
+            flatify(step['step'])
+            if step['cleanup']:
+                indend[0] -= 2
+            flatify(step['cleanup'])
+        flatify(step)
+
+        res[0] += '\n'
+
+    print res[0]
 
 
 def _get_test_case_step(step, name):
-    if not step:
+
+    result = []
+
+    def flatify(step):
+        if not step:
+            return
+        result.append(step)
+        flatify(step['step'])
+        flatify(step['cleanup'])
+
+    flatify(step)
+
+    for idx, flat_step in enumerate(result):
+        if flat_step['name'] == name:
+            while flat_step['step']:
+                flat_step = flat_step['step']
+            name = flat_step['name']
+            break
+    else:
         return
 
-    if step['name'] == name:
-        while step['step']:
-            step = step['step']
-        return step
-
-    res1 = _get_test_case_step(step['step'], name)
-    res2 = _get_test_case_step(step['cleanup'], name)
-    return res1 or res2
+    for idx, flat_step in enumerate(result):
+        if flat_step['name'] == name and not flat_step['step']:
+            return (idx, flat_step)
+    else:
+        return
 
 
 def _get_step_node(step):

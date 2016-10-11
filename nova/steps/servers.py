@@ -9,6 +9,7 @@ class ServerSteps(object):
         print "Create server", server_name
         return server
 
+    @dock.inlet.server.detached
     @dock.outlet.server.lock
     def lock_server(self, server):
         print "Lock server", server
@@ -41,3 +42,12 @@ class ServerSteps(object):
     @dock.outlet.server.delete
     def delete_server(self, server):
         print "Delete server", server
+
+    @dock.outlet.server.attach_floating_ip
+    def attach_floating_ip(self, server, floating_ip, check=True):
+        pass
+
+    @dock.inlet.server.attach_floating_ip
+    @dock.outlet.server.detach_floating_ip
+    def detach_floating_ip(self, server, floating_ip, check=True):
+        pass
