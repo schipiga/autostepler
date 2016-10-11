@@ -6,10 +6,10 @@ from .security_groups import *
 from .servers import *
 
 __all__ = [
-    # 'FlavorSteps',
-    # 'KeypairSteps',
+    'FlavorSteps',
+    'KeypairSteps',
     'NetworkSteps',
     'RouterSteps',
-    # 'SecurityGroupSteps',
-    # 'ServerSteps',
+    'SecurityGroupSteps',
+    'ServerSteps',
 ]

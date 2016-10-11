@@ -22,76 +22,109 @@ def pytest_generate_tests(metafunc):
 
 def pytest_configure(config):
     step_nodes = [_get_step_node(step) for step in ALL_STEPS]
-    _attach_cleanups(step_nodes)
-    step_nodes = [{'is_used': False, 'step': node} for node in step_nodes]
+    step_nodes = _attach_cleanups(step_nodes)
+    step_nodes = _sort_nodes(step_nodes)
 
     test_cases = _compose_test_cases(step_nodes)
     print_test_cases(test_cases)
     import ipdb; ipdb.set_trace()
 
 
+def _sort_nodes(step_nodes):
+    other_nodes = [node for node in step_nodes if not node['name'].startswith('create_')]
+    other_nodes.sort(key=lambda node: node['name'])
+    create_nodes = [node for node in step_nodes if node['name'].startswith('create_')]
+    create_nodes.sort(key=lambda node: node['name'])
+    return [{'is_used': False, 'step': step} for step in other_nodes + create_nodes]
+
+
 def _compose_test_cases(step_nodes):
 
-    def _compose(step):
-        resource_names = set(step['args']) & REGISTERED_RESOURCES
-        inlet = step['inlet']
+    def _get_step_matcher(step_inlet, resource_name):
+        in_resource_status = step_inlet.get(resource_name)
+        if in_resource_status:
+            return (resource_name, in_resource_status)
+        else:
+            return (resource_name, 'create')
+
+    def _get_join_steps(step):
+        if step['cleanup']:
+            return [step, step['cleanup']]
+        else:
+            return [step]
+
+    def _set_join_step_in_test_case(step_name):
+        if not test_case_step[0]:
+
+            for idx, test_case in enumerate(test_cases):
+                result = _get_joined_step_from_test_case(
+                    test_case, step_name)
+                if result:
+                    test_case_step[0] = result
+                    test_case_step[0]['case_index'] = idx
+            return True
+
+        else:
+            case_idx = test_case_step[0]['case_index']
+            result = _get_joined_step_from_test_case(
+                test_cases[case_idx], step_name)
+
+            if result:
+                if test_case_step[0]['index'] < result['index']:
+                    test_case_step[0] = result
+                    test_case_step[0]['case_index'] = case_idx
+                return True
+            else:
+                return False
+
+    def _compose(head_step):
+        step_inlet = head_step['inlet']
+        resource_names = sorted(set(head_step['args']) & REGISTERED_RESOURCES)
 
         for resource_name in resource_names:
-            in_resource_status = inlet.get(resource_name)
-            if in_resource_status:
-                step_matcher = (resource_name, in_resource_status)
-            else:
-                step_matcher = (resource_name, 'create')
+            step_matcher = _get_step_matcher(step_inlet, resource_name)
+            is_matched = False
 
             for node in step_nodes[:]:
-                prev_step = copy.copy(node['step'])
+                required_step = copy.deepcopy(node['step'])
 
-                if prev_step['cleanup']:
-                    join_steps = (prev_step, prev_step['cleanup'])
-                else:
-                    join_steps = (prev_step,)
+                for join_step in _get_join_steps(required_step):
 
-                for join_step in join_steps:
-                    if step_matcher in join_step['outlet'].items():
-
-                        if node['is_used']:
-                            if test_case_idx[0]:
-                                idx = test_case_idx[0]
-                                _test_case_step = _get_test_case_step(
-                                    test_cases[idx], join_step['name'])
-                            else:
-                                for idx, test_case in enumerate(test_cases):
-                                    _test_case_step = _get_test_case_step(
-                                        test_case, join_step['name'])
-
-                            if _test_case_step:
-                                if not test_case_step[0]:
-                                    test_case_step[0] = _test_case_step
-                                else:
-                                    if (test_case_step[0][0] <
-                                            _test_case_step[0]):
-                                        test_case_step[0] = _test_case_step
-
-                        else:
-                            join_step['step'] = step
-                            node['is_used'] = True
-                            step = _compose(prev_step)
+                    if step_matcher not in join_step['outlet'].items():
                         break
-        return step
+
+                    is_matched = True
+                    is_join_step_set = False
+
+                    if node['is_used']:
+                        is_join_step_set = _set_join_step_in_test_case(
+                            join_step['name'])
+
+                    if not is_join_step_set:
+                        join_step['step'] = head_step
+                        node['is_used'] = True
+                        head_step = _compose(required_step)
+
+                    if is_matched:
+                        break
+
+                if is_matched:
+                    break
+
+        return head_step
 
     test_cases = []
     for node in step_nodes[:]:
         if node['is_used']:
             continue
 
-        step = copy.copy(node['step'])
+        step = copy.deepcopy(node['step'])
 
-        test_case_idx = [None]
         test_case_step = [None]
         step = _compose(step)
 
         if test_case_step[0]:
-            test_case_step[0][1]['step'] = step
+            test_case_step[0]['step']['step'] = step
         else:
             test_cases.append(step)
 
@@ -135,6 +168,7 @@ def _attach_cleanups(step_nodes):
         else:
             raise LookupError(
                 "No setup step for cleanup {}".format(node['name']))
+    return step_nodes
 
 
 def print_test_cases(test_cases):
@@ -159,33 +193,46 @@ def print_test_cases(test_cases):
     print res[0]
 
 
-def _get_test_case_step(step, name):
+def _get_joined_step_from_test_case(step, name):
+    """Get step from test case to join to him.
 
-    result = []
-
-    def flatify(step):
+    If step is usaged already in test, let's try to find it and to join in
+    testcase.
+    """
+    def flatify(step, bucket=None):
         if not step:
             return
-        result.append(step)
-        flatify(step['step'])
-        flatify(step['cleanup'])
 
-    flatify(step)
+        bucket = [] if bucket is None else bucket
+        bucket.append(step)
 
-    for idx, flat_step in enumerate(result):
+        flatify(step['step'], bucket)
+        flatify(step['cleanup'], bucket)
+
+        return bucket
+
+    flat_steps = flatify(step)  # get plain list of steps tree
+
+    for idx, flat_step in enumerate(flat_steps):
         if flat_step['name'] == name:
+
             while flat_step['step']:
-                flat_step = flat_step['step']
+                flat_step = flat_step['step']  # find a step to get in queue
+
             name = flat_step['name']
             break
     else:
-        return
+        return  # used step is not found in current test case
 
-    for idx, flat_step in enumerate(result):
-        if flat_step['name'] == name and not flat_step['step']:
-            return (idx, flat_step)
+    for idx, flat_step in enumerate(flat_steps):
+        if flat_step['name'] == name:
+            # return step to join with its index in plain list
+            return {'index': idx, 'step': flat_step}
+
     else:
-        return
+        import ipdb; ipdb.set_trace()
+        # raise exception if nonsense happens
+        raise Exception("Can't find step in plain list")
 
 
 def _get_step_node(step):
