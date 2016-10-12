@@ -4,6 +4,7 @@ from .networks import *
 from .routers import *
 from .security_groups import *
 from .servers import *
+from .subnets import *
 
 __all__ = [
     'FlavorSteps',
@@ -12,4 +13,5 @@ __all__ = [
     'RouterSteps',
     'SecurityGroupSteps',
     'ServerSteps',
+    'SubnetSteps',
 ]

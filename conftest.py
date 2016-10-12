@@ -15,6 +15,11 @@ CLEANUP_DICT = {
 }
 
 
+def pytest_addoption(parser):
+    """Hook to register checker options."""
+    parser.addoption("--complex-tests", action="store_true")
+
+
 def pytest_generate_tests(metafunc):
     if 'test_case' in metafunc.fixturenames:
         metafunc.parametrize('test_case', ['a', 'b', 'c'])
@@ -25,9 +30,8 @@ def pytest_configure(config):
     step_nodes = _attach_cleanups(step_nodes)
     step_nodes = _sort_nodes(step_nodes)
 
-    test_cases = _compose_test_cases(step_nodes)
+    test_cases = _compose_test_cases(step_nodes, config)
     print_test_cases(test_cases)
-    import ipdb; ipdb.set_trace()
 
 
 def _sort_nodes(step_nodes):
@@ -38,7 +42,7 @@ def _sort_nodes(step_nodes):
     return [{'is_used': False, 'step': step} for step in other_nodes + create_nodes]
 
 
-def _compose_test_cases(step_nodes):
+def _compose_test_cases(step_nodes, config):
 
     def _get_step_matcher(step_inlet, resource_name):
         in_resource_status = step_inlet.get(resource_name)
@@ -91,22 +95,22 @@ def _compose_test_cases(step_nodes):
                 for join_step in _get_join_steps(required_step):
 
                     if step_matcher not in join_step['outlet'].items():
-                        break
+                        continue
 
                     is_matched = True
                     is_join_step_set = False
 
-                    if node['is_used']:
-                        is_join_step_set = _set_join_step_in_test_case(
-                            join_step['name'])
+                    if config.option.complex_tests:
+                        if node['is_used']:
+                            is_join_step_set = _set_join_step_in_test_case(
+                                join_step['name'])
 
                     if not is_join_step_set:
                         join_step['step'] = head_step
                         node['is_used'] = True
                         head_step = _compose(required_step)
 
-                    if is_matched:
-                        break
+                    break
 
                 if is_matched:
                     break

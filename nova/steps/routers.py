@@ -21,29 +21,3 @@ class RouterSteps(object):
     @dock.outlet.router.unset_gateway
     def clear_gateway(self, router, check=True):
         pass
-
-    # @steps_checker.step
-    # def add_subnet_interface(self, router, subnet, check=True):
-    #     """Step to add router to subnet interface.
-
-    #     Args:
-    #         router (dict): router
-    #         subnet (dict): subnet
-    #     """
-    #     self._client.add_subnet_interface(router_id=router['id'],
-    #                                       subnet_id=subnet['id'])
-    #     if check:
-    #         self.check_interface_subnet_presence(router, subnet)
-
-    # @steps_checker.step
-    # def remove_subnet_interface(self, router, subnet, check=True):
-    #     """Step to remove router to subnet interface.
-
-    #     Args:
-    #         router (dict): router
-    #         subnet (dict): subnet
-    #     """
-    #     self._client.remove_subnet_interface(router_id=router['id'],
-    #                                          subnet_id=subnet['id'])
-    #     if check:
-    #         self.check_interface_subnet_presence(router, subnet, present=False)
